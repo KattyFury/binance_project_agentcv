@@ -1,0 +1,14 @@
+{
+  "name": "agentcv-keeper",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // every 5 min: records prices at :00/:05 (10-min window), settles and finalizes when due. Free plan allows 5 crons per account.
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": {
+    "ARENA": "0x08894b6E782fD65587F2c02e1617f0e9FcDc16F5",
+    "RPC_URL": "https://bsc-dataseed.bnbchain.org"
+  },
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+  // secret: BOT_KEY  (npx wrangler secret put BOT_KEY)
+}
