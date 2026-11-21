@@ -76,9 +76,13 @@ export default {
   async scheduled(_event, env, ctx) {
     ctx.waitUntil(run(env).then((l) => console.log(l.join(" | "))));
   },
-  // /api/* -> public API + relayer; GET / -> keeper status
+  // static site from public/; /api/status -> keeper status; other /api/* -> public API + relayer
   async fetch(req, env) {
-    if (new URL(req.url).pathname.startsWith("/api/")) return handleApi(req, env);
+    const path = new URL(req.url).pathname;
+    if (path !== "/api/status") {
+      if (path.startsWith("/api/")) return handleApi(req, env);
+      return env.ASSETS.fetch(req);
+    }
     const pub = createPublicClient({ chain: bsc, transport: http(env.RPC_URL) });
     const genesis = Number(await pub.readContract({ address: env.ARENA, abi: ABI, functionName: "GENESIS" }));
     const hour = Math.floor((Date.now() / 1000 - genesis) / 3600);

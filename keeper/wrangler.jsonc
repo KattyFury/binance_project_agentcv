@@ -1,6 +1,7 @@
 {
-  "name": "agentcv-keeper",
+  "name": "agentcv",
   "main": "src/index.js",
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*"], "not_found_handling": "single-page-application" },
   "compatibility_date": "2026-11-01",
   "compatibility_flags": ["nodejs_compat"],
   // every 5 min: records prices at :00/:05 (10-min window), settles and finalizes when due. Free plan allows 5 crons per account.

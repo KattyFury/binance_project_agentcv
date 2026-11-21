@@ -11,10 +11,19 @@ const ARENA_ABI = parseAbi([
   "function recorded(uint32) view returns (bool)",
   "function prices(uint32,uint8) view returns (int256 price, bool valid)",
   "function paused() view returns (bool)",
+  "function minRounds() view returns (uint32)",
+  "function getWeekTop(uint32) view returns (address[10])",
+  "function getWeekAgent(uint32,address) view returns (int256 skill, uint32 count, uint40 lastUpdate)",
+  "function weekAgentCount(uint32) view returns (uint256)",
+  "function weekFinalized(uint32) view returns (bool)",
+  "function predictorCount(uint8,uint32,uint8) view returns (uint256)",
+  "function getDay(address,uint32) view returns (int256 skill, uint32 count)",
   `function predictBySig(address agent, ${ITEM}[] items, uint64 deadline, bytes sig)`,
 ]);
 const REG_ABI = parseAbi([
   "function nonces(address) view returns (uint256)",
+  "function nextId() view returns (uint64)",
+  "function getReport(uint64) view returns ((address author,bytes32 contentHash,string uri,uint8 assetTag,uint64 prevVersionId,uint40 createdAt,uint32 starSum,uint32 reviewCount))",
   "function publishBySig(address author, bytes32 contentHash, string uri, uint8 assetTag, uint64 prevVersionId, uint64 deadline, bytes sig) returns (uint64)",
   "function reviewBySig(address reviewer, uint64 reportId, uint8 stars, uint64 deadline, bytes sig)",
 ]);
@@ -83,10 +92,13 @@ const json = (data, status = 200) =>
 export async function handleApi(req, env) {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   const url = new URL(req.url);
-  const pub = createPublicClient({ chain: bsc, transport: http(env.RPC_URL, { batch: true }) });
+  const pub = createPublicClient({ chain: bsc, batch: { multicall: true }, transport: http(env.RPC_URL) });
   const domain = (contract) => ({ name: "AgentReputationHub", version: "1", chainId: 56, verifyingContract: contract });
   try {
     if (req.method === "GET" && url.pathname === "/api/rounds") return json(await rounds(pub, env, url, domain));
+    if (req.method === "GET" && url.pathname === "/api/leaderboard") return json(await leaderboard(pub, env, url));
+    if (req.method === "GET" && url.pathname === "/api/round-stats") return json(await roundStats(pub, env));
+    if (req.method === "GET" && url.pathname === "/api/reports") return json(await reports(pub, env));
     const m = url.pathname.match(/^\/api\/agent\/(0x[0-9a-fA-F]{40})$/);
     if (req.method === "GET" && m) return json(await agent(pub, env, getAddress(m[1])));
     if (req.method === "POST" && url.pathname === "/api/relay") return json(...(await relay(pub, env, await req.json())));
@@ -134,11 +146,81 @@ async function rounds(pub, env, url, domain) {
 }
 
 async function agent(pub, env, a) {
-  const [r, bal] = await Promise.all([
+  const read = (functionName, args = []) => pub.readContract({ address: env.ARENA, abi: ARENA_ABI, functionName, args });
+  const genesis = Number(await read("GENESIS"));
+  const today = Math.max(0, Math.floor((Date.now() / 1000 - genesis) / 86400));
+  const dayIdx = [];
+  for (let d = Math.max(0, today - 13); d <= today; d++) dayIdx.push(d);
+  const [r, bal, days] = await Promise.all([
     pub.readContract({ address: env.HUB, abi: HUB_ABI, functionName: "getReputation", args: [a] }),
     pub.readContract({ address: env.AGENT_ID, abi: AGENT_ID_ABI, functionName: "balanceOf", args: [a] }),
+    Promise.all(dayIdx.map((d) => read("getDay", [a, d]))),
   ]);
-  return { address: a, hasAgentId: bal > 0n, ...r, note: "skill values are micro-units (1e6 = 1 point)" };
+  return {
+    address: a, hasAgentId: bal > 0n, ...r,
+    days: dayIdx.map((d, i) => ({ day: d, date: new Date((genesis + d * 86400) * 1000).toISOString().slice(0, 10), skill: days[i][0], count: days[i][1] })),
+    note: "skill values are micro-units (1e6 = 1 point)",
+  };
+}
+
+async function leaderboard(pub, env, url) {
+  const read = (functionName, args = []) => pub.readContract({ address: env.ARENA, abi: ARENA_ABI, functionName, args });
+  const [genesis, minRounds] = (await Promise.all([read("GENESIS"), read("minRounds")])).map(Number);
+  const hour = Math.max(0, Math.floor((Date.now() / 1000 - genesis) / 3600));
+  const currentWeek = Math.floor(hour / 168);
+  const w = url.searchParams.has("week") ? Number(url.searchParams.get("week")) : currentWeek;
+  const [top, finalized, agents] = await Promise.all([read("getWeekTop", [w]), read("weekFinalized", [w]), read("weekAgentCount", [w])]);
+  const addrs = top.filter((x) => x !== "0x0000000000000000000000000000000000000000");
+  const stats = await Promise.all(addrs.map((x) => read("getWeekAgent", [w, x])));
+  const reps = await Promise.all(addrs.map((x) => pub.readContract({ address: env.HUB, abi: HUB_ABI, functionName: "getReputation", args: [x] })));
+  return {
+    week: w, currentWeek, finalized, minRounds, agentsThisWeek: agents,
+    startsAt: genesis + w * 168 * 3600, endsAt: genesis + (w + 1) * 168 * 3600,
+    rows: addrs.map((x, i) => ({ rank: i + 1, address: x, weekSkill: stats[i][0], weekCount: stats[i][1],
+      allSkill: reps[i].predSkillAll, allCount: reps[i].predCountAll, reports: reps[i].reportsCount,
+      avgStarsMilli: reps[i].avgStarsBps, reviews: reps[i].reviewsCount, toolkit: reps[i].toolkit })),
+  };
+}
+
+async function roundStats(pub, env) {
+  const read = (functionName, args = []) => pub.readContract({ address: env.ARENA, abi: ARENA_ABI, functionName, args });
+  const genesis = Number(await read("GENESIS"));
+  const hour = Math.max(0, Math.floor((Date.now() / 1000 - genesis) / 3600));
+  const ts = (h) => genesis + h * 3600;
+  const d1 = Math.ceil((hour + 1) / 24) * 24;
+  const open = [[1, hour + 1], [24, d1]];
+  const running = [[1, hour]];
+  if (hour >= 0) running.push([24, Math.floor(hour / 24) * 24]);
+  const recent = [];
+  for (let s = hour - 1; s >= Math.max(0, hour - 12); s--) recent.push([1, s]);
+  const all = [...open, ...running, ...recent];
+  const hours = [...new Set(all.flatMap(([h, s]) => [s, s + h]))];
+  const priceRows = await Promise.all(hours.map((h) => Promise.all([read("recorded", [h]), ...[0, 1, 2].map((a) => read("prices", [h, a]))])));
+  const P = Object.fromEntries(hours.map((h, i) => [h, { recorded: priceRows[i][0], p: priceRows[i].slice(1).map((x) => (x[1] ? x[0] : null)) }]));
+  const counts = await Promise.all(all.map(([h, s]) => Promise.all([0, 1, 2].map((a) => read("predictorCount", [h, s, a])))));
+  const fmt = ([h, s], i) => ({
+    horizon: h, startHour: s, startsAt: ts(s), endsAt: ts(s + h),
+    assets: [0, 1, 2].map((a) => {
+      const p0 = P[s]?.p[a] ?? null, p1 = P[s + h]?.p[a] ?? null;
+      const ended = Date.now() / 1000 > ts(s + h) + 600;
+      const result = !ended ? "pending" : p0 === null || p1 === null || p0 === p1 ? "void" : p1 > p0 ? "up" : "down";
+      return { asset: ASSETS[a], predictors: counts[i][a], startPrice: p0, endPrice: p1, result };
+    }),
+  });
+  return {
+    currentHour: hour,
+    open: open.map((r, i) => fmt(r, i)),
+    running: running.map((r, i) => fmt(r, i + open.length)),
+    recent: recent.map((r, i) => fmt(r, i + open.length + running.length)),
+  };
+}
+
+async function reports(pub, env) {
+  const next = Number(await pub.readContract({ address: env.REGISTRY, abi: REG_ABI, functionName: "nextId" }));
+  const ids = [];
+  for (let id = next - 1; id >= 1 && ids.length < 50; id--) ids.push(id);
+  const rows = await Promise.all(ids.map((id) => pub.readContract({ address: env.REGISTRY, abi: REG_ABI, functionName: "getReport", args: [BigInt(id)] })));
+  return { total: next - 1, reports: rows.map((r, i) => ({ id: ids[i], ...r, asset: r.assetTag === 255 ? "General" : ASSETS[r.assetTag] })) };
 }
 
 async function relay(pub, env, body) {
