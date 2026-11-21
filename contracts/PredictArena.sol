@@ -66,9 +66,9 @@ contract PredictArena is EIP712, Ownable, Pausable {
     uint256 public constant RECORD_WINDOW = 10 minutes;
     uint256 public constant STALE_AFTER = 30 minutes;
     uint256 public constant FINALIZE_GRACE = 6 hours;
-    uint32 public constant MAX_AHEAD_H1 = 6;
+    uint32 public constant MAX_AHEAD_H1 = 1; // only the next hour: forecast with fresh data, one round at a time
     uint32 public constant MAX_AHEAD_D1 = 24;
-    uint256 public constant MAX_BATCH = 18;
+    uint256 public constant MAX_BATCH = 6; // next 1h round + next 24h round, x 3 assets
     uint256 public constant MAX_NOTE_BYTES = 280;
 
     bytes32 private constant ITEM_TYPEHASH = keccak256(

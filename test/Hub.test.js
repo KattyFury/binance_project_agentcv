@@ -70,8 +70,8 @@ describe("PredictArena - entries", () => {
     const c = await loadFixture(deploy);
     const now = Number(await c.arena.currentHour());
     await expect(c.arena.connect(c.a1).predict([item(1, now, 0, 5000)])).to.be.revertedWith("round locked");
-    await expect(c.arena.connect(c.a1).predict([item(1, now + 7, 0, 5000)])).to.be.revertedWith("too far ahead");
-    await c.arena.connect(c.a1).predict([item(1, now + 6, 0, 5000)]); // exactly 6 ahead is fine
+    await expect(c.arena.connect(c.a1).predict([item(1, now + 2, 0, 5000)])).to.be.revertedWith("too far ahead");
+    await c.arena.connect(c.a1).predict([item(1, now + 1, 0, 5000)]); // only the next hour is open
   });
 
   it("D1 rounds only start at 00:00 UTC hour boundaries (multiple of 24)", async () => {
@@ -84,18 +84,19 @@ describe("PredictArena - entries", () => {
     await c.arena.connect(c.a1).predict([item(24, d1, 0, 5000)]);
   });
 
-  it("limits batch size to 18 and rejects empty or oversized notes", async () => {
+  it("limits batch size to 6 and rejects empty or oversized notes", async () => {
     const c = await loadFixture(deploy);
     const s = Number(await c.arena.currentHour()) + 1;
     await expect(c.arena.connect(c.a1).predict([])).to.be.revertedWith("bad batch size");
     const many = [];
-    for (let i = 0; i < 19; i++) many.push(item(1, s + (i % 6), i % 3, 5000));
+    for (let i = 0; i < 7; i++) many.push(item(1, s, i % 3, 5000));
     await expect(c.arena.connect(c.a1).predict(many)).to.be.revertedWith("bad batch size");
     await expect(c.arena.connect(c.a1).predict([item(1, s, 0, 5000, 0, "x".repeat(281))])).to.be.revertedWith(
       "note too long"
     );
     const ok = [];
-    for (let h = 0; h < 6; h++) for (let a = 0; a < 3; a++) ok.push(item(1, s + h, a, 5000)); // 18 items
+    const d1 = Math.ceil(s / 24) * 24;
+    for (let a = 0; a < 3; a++) ok.push(item(1, s, a, 5000), item(24, d1, a, 5000)); // 6 items: next 1h + next 24h
     await c.arena.connect(c.a1).predict(ok);
   });
 
@@ -153,8 +154,8 @@ describe("PredictArena - prices and settlement", () => {
   it("voids rounds when the price is unchanged, stale, feed down, or never recorded", async () => {
     const c = await loadFixture(deploy);
     await c.arena.connect(c.a1).predict([item(1, 11, 0, 9000), item(1, 11, 1, 9000), item(1, 11, 2, 9000)]);
-    await c.arena.connect(c.a1).predict([item(1, 12, 0, 9000)]);
     await recordAt(c, 11, 100, 2000, 600);
+    await c.arena.connect(c.a1).predict([item(1, 12, 0, 9000)]); // next hour only
     // hour 12: BTC unchanged, ETH stale (updated 2h before), BNB feed down
     const t = ts(c.genesis, 12) + 60;
     await time.increaseTo(t);
@@ -220,12 +221,18 @@ describe("PredictArena - weekly leaderboard", () => {
   async function weekFixture() {
     const c = await deploy(2);
     // BTC path hours 11..14: 100, 110, 100, 120 -> rounds: up, down, up
-    await c.arena.connect(c.a1).predict([item(1, 11, 0, 8000), item(1, 12, 0, 3000), item(1, 13, 0, 8000)]);
-    await c.arena.connect(c.a2).predict([item(1, 11, 0, 2000), item(1, 12, 0, 7000), item(1, 13, 0, 2000)]);
-    await c.arena.connect(c.a3).predict([item(1, 11, 0, 8000), item(1, 12, 0, 3000)]);
+    // only the next hour is open, so agents forecast one hour at a time
+    await c.arena.connect(c.a1).predict([item(1, 11, 0, 8000)]);
+    await c.arena.connect(c.a2).predict([item(1, 11, 0, 2000)]);
+    await c.arena.connect(c.a3).predict([item(1, 11, 0, 8000)]);
     await c.arena.connect(c.a4).predict([item(1, 11, 0, 9000)]); // only 1 round: not eligible (min 2)
     await recordAt(c, 11, 100);
+    await c.arena.connect(c.a1).predict([item(1, 12, 0, 3000)]);
+    await c.arena.connect(c.a2).predict([item(1, 12, 0, 7000)]);
+    await c.arena.connect(c.a3).predict([item(1, 12, 0, 3000)]);
     await recordAt(c, 12, 110);
+    await c.arena.connect(c.a1).predict([item(1, 13, 0, 8000)]);
+    await c.arena.connect(c.a2).predict([item(1, 13, 0, 2000)]);
     await recordAt(c, 13, 100);
     await recordAt(c, 14, 120);
     for (const st of [11, 12, 13]) await c.arena.settle(1, st, 0, 20);

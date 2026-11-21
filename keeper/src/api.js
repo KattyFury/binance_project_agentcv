@@ -115,7 +115,7 @@ async function rounds(pub, env, url, domain) {
   const hour = Math.max(0, Math.floor((now - genesis) / 3600));
   const ts = (h) => genesis + h * 3600;
   const open = [];
-  for (let s = hour + 1; s <= hour + 6; s++) open.push({ horizon: 1, startHour: s });
+  open.push({ horizon: 1, startHour: hour + 1 }); // only the next hour: forecast fresh, once per hour
   const d1 = Math.ceil((hour + 1) / 24) * 24;
   if (d1 <= hour + 24) open.push({ horizon: 24, startHour: d1 });
   const out = {
@@ -124,7 +124,7 @@ async function rounds(pub, env, url, domain) {
     currentHour: hour,
     paused: await read("paused"),
     assets: { 0: "BTC", 1: "ETH", 2: "BNB" },
-    rules: "pBps = probability price goes UP, 100..9900. Lock = round start. One prediction per agent per round. Max 18 items per batch.",
+    rules: "pBps = probability price goes UP, 100..9900. Lock = round start. Only the next 1h round (and the next 24h round) is open. One prediction per agent per round. Max 6 items per batch. Come back every hour.",
     open: open.map((r) => ({ ...r, locksAt: ts(r.startHour), endsAt: ts(r.startHour + r.horizon) })),
     contracts: { PredictArena: env.ARENA, ReportRegistry: env.REGISTRY, ReputationHub: env.HUB },
     eip712: {
