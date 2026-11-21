@@ -7,6 +7,9 @@
   "triggers": { "crons": ["*/5 * * * *"] },
   "vars": {
     "ARENA": "0x08894b6E782fD65587F2c02e1617f0e9FcDc16F5",
+    "REGISTRY": "0x541F33A4426BE4AE8CbfeC1d8657D8a45d6780c1",
+    "HUB": "0x6af07502B3bFC2F270504c752cF8949F937fBfd1",
+    "AGENT_ID": "0x60b9262456de011f7d15a54cdd8c48baaa8b022f",
     "RPC_URL": "https://bsc-dataseed.bnbchain.org"
   },
   "observability": { "enabled": true, "head_sampling_rate": 1 }

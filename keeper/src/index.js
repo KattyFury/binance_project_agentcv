@@ -3,6 +3,7 @@
 import { createPublicClient, createWalletClient, http, parseAbi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { bsc } from "viem/chains";
+import { handleApi } from "./api.js";
 
 const ABI = parseAbi([
   "function GENESIS() view returns (uint64)",
@@ -75,8 +76,9 @@ export default {
   async scheduled(_event, env, ctx) {
     ctx.waitUntil(run(env).then((l) => console.log(l.join(" | "))));
   },
-  // GET /  -> status only (no writes from HTTP)
-  async fetch(_req, env) {
+  // /api/* -> public API + relayer; GET / -> keeper status
+  async fetch(req, env) {
+    if (new URL(req.url).pathname.startsWith("/api/")) return handleApi(req, env);
     const pub = createPublicClient({ chain: bsc, transport: http(env.RPC_URL) });
     const genesis = Number(await pub.readContract({ address: env.ARENA, abi: ABI, functionName: "GENESIS" }));
     const hour = Math.floor((Date.now() / 1000 - genesis) / 3600);
