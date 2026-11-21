@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>agentCV deploy</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; }
+  label { display: block; margin: 10px 0 2px; font-weight: 600; }
+  input, select { width: 100%; padding: 6px; font: 14px monospace; box-sizing: border-box; }
+  button { margin-top: 16px; padding: 10px 18px; font-size: 15px; cursor: pointer; }
+  pre { background: #f4f4f4; padding: 12px; white-space: pre-wrap; word-break: break-all; }
+  .note { color: #666; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>agentCV deploy</h1>
+<p class="note">Your wallet signs 4 transactions (ReportRegistry, PredictArena, ReputationHub, ReputationGate). The connected wallet becomes owner.</p>
+
+<label>Network</label>
+<select id="net"><option value="56">BNB Chain mainnet (56)</option><option value="97">BNB Chain testnet (97)</option></select>
+<label>Deployment name (file in deployments/)</label>
+<input id="name" value="bsc-trial">
+<label>Genesis (unix, hour-aligned)</label>
+<input id="genesis"><div class="note" id="genesisHuman"></div>
+<label>Min rounds per week for leaderboard</label>
+<input id="minRounds" value="10">
+<label>Gate min score (micro)</label>
+<input id="gateMin" value="200000">
+<label>Agent ID contract</label>
+<input id="agentId">
+<label>Feeds BTC, ETH, BNB (Chainlink)</label>
+<input id="feeds">
+
+<button id="go">Connect wallet and deploy</button>
+<pre id="log"></pre>
+
+<script src="/ethers.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const log = (s) => ($("log").textContent += s + "\n");
+let data;
+const showGenesis = () => ($("genesisHuman").textContent = new Date(Number($("genesis").value) * 1000).toUTCString());
+$("genesis").oninput = showGenesis;
+
+fetch("/contracts.json").then((r) => r.json()).then((d) => {
+  data = d;
+  $("agentId").value = d.config.agentId;
+  $("feeds").value = d.config.feeds.join(",");
+  $("genesis").value = Math.floor(Date.now() / 3600000) * 3600; // current hour, so rounds start now
+  showGenesis();
+});
+
+$("go").onclick = async () => {
+  $("go").disabled = true;
+  try {
+    if (!window.ethereum) throw new Error("No browser wallet found");
+    const chainId = Number($("net").value);
+    await ethereum.request({ method: "eth_requestAccounts" });
+    try {
+      await ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x" + chainId.toString(16) }] });
+    } catch (e) { throw new Error("Switch your wallet to chain " + chainId + " first"); }
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const signer = await provider.getSigner();
+    const net = await provider.getNetwork();
+    if (Number(net.chainId) !== chainId) throw new Error("Wallet is on chain " + net.chainId);
+    const me = await signer.getAddress();
+    log("Wallet: " + me + "  balance: " + ethers.formatEther(await provider.getBalance(me)) + " BNB");
+
+    const genesis = Number($("genesis").value);
+    if (genesis % 3600 !== 0) throw new Error("Genesis must be hour-aligned");
+    const minRounds = Number($("minRounds").value);
+    const gateMin = BigInt($("gateMin").value);
+    const agentId = $("agentId").value.trim();
+    const feeds = $("feeds").value.split(",").map((s) => s.trim());
+    if (feeds.length !== 3 || feeds.some((f) => !ethers.isAddress(f))) throw new Error("Need 3 feed addresses");
+
+    const deploy = async (name, args) => {
+      const c = data.contracts[name];
+      log("Sign " + name + " in your wallet...");
+      const ct = await new ethers.ContractFactory(c.abi, c.bytecode, signer).deploy(...args);
+      log("  tx " + ct.deploymentTransaction().hash);
+      await ct.waitForDeployment();
+      const a = await ct.getAddress();
+      log("  " + name + " = " + a);
+      return a;
+    };
+    const reg = await deploy("ReportRegistry", [agentId]);
+    const arena = await deploy("PredictArena", [agentId, reg, feeds, genesis, minRounds]);
+    const hub = await deploy("ReputationHub", [arena, reg]);
+    const gate = await deploy("ReputationGate", [hub, gateMin]);
+
+    const out = {
+      network: $("name").value.trim(), chainId, owner: me, agentId, genesis, minRounds, feeds,
+      ReportRegistry: reg, PredictArena: arena, ReputationHub: hub, ReputationGate: gate,
+      constructorArgs: {
+        ReportRegistry: [agentId],
+        PredictArena: [agentId, reg, feeds, genesis, minRounds],
+        ReputationHub: [arena, reg],
+        ReputationGate: [hub, gateMin.toString()],
+      },
+    };
+    log("\n" + JSON.stringify(out, null, 2));
+    const r = await fetch("/save", { method: "POST", body: JSON.stringify(out) });
+    log("\n" + (await r.text()));
+  } catch (e) {
+    log("ERROR: " + (e.shortMessage || e.message));
+    $("go").disabled = false;
+  }
+};
+</script>
+</body>
+</html>
