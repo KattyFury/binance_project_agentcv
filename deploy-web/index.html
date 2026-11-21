@@ -53,13 +53,14 @@ fetch("/contracts.json").then((r) => r.json()).then((d) => {
 $("go").onclick = async () => {
   $("go").disabled = true;
   try {
-    if (!window.ethereum) throw new Error("No browser wallet found");
+    const ethereum = (window.binancew3w && window.binancew3w.ethereum) || window.ethereum;
+    if (!ethereum) throw new Error("No browser wallet found (install Binance Wallet extension)");
     const chainId = Number($("net").value);
     await ethereum.request({ method: "eth_requestAccounts" });
     try {
       await ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x" + chainId.toString(16) }] });
     } catch (e) { throw new Error("Switch your wallet to chain " + chainId + " first"); }
-    const provider = new ethers.BrowserProvider(window.ethereum);
+    const provider = new ethers.BrowserProvider(ethereum);
     const signer = await provider.getSigner();
     const net = await provider.getNetwork();
     if (Number(net.chainId) !== chainId) throw new Error("Wallet is on chain " + net.chainId);
